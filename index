@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Monitor Pernapasan — Prototipe GEMASTIK</title>
+<meta name="description" content="Simulasi dashboard monitor deteksi dini wheezing untuk prototipe alat asma berbasis ESP32 dan machine learning.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="device-id">
+    <span class="dot dot-live" id="connDot"></span>
+    <div>
+      <strong>UNIT-01</strong>
+      <span class="sub" id="connText">terhubung &middot; ESP32 (simulasi)</span>
+    </div>
+  </div>
+  <h1>Monitor Deteksi Dini Wheezing</h1>
+  <div class="battery">
+    <span class="sub">baterai</span>
+    <strong id="battLevel">92%</strong>
+  </div>
+</header>
+
+<main>
+
+  <!-- ===== STATUS BANNER ===== -->
+  <section class="banner" id="statusBanner">
+    <div class="banner-left">
+      <span class="banner-label">Klasifikasi saat ini</span>
+      <span class="banner-status" id="statusText">NORMAL</span>
+    </div>
+    <button class="btn-trigger" id="triggerBtn">Simulasikan episode wheezing</button>
+  </section>
+
+  <!-- ===== LANES ===== -->
+  <section class="lanes">
+
+    <article class="lane">
+      <div class="lane-info">
+        <span class="lane-label">Detak Jantung</span>
+        <span class="lane-value"><strong id="hrValue">78</strong><small>bpm</small></span>
+      </div>
+      <canvas id="hrCanvas" class="lane-canvas"></canvas>
+    </article>
+
+    <article class="lane">
+      <div class="lane-info">
+        <span class="lane-label">Saturasi Oksigen</span>
+        <span class="lane-value"><strong id="spo2Value">98</strong><small>% SpO&sub2;</small></span>
+      </div>
+      <canvas id="spo2Canvas" class="lane-canvas"></canvas>
+    </article>
+
+    <article class="lane">
+      <div class="lane-info">
+        <span class="lane-label">Sinyal Suara Napas</span>
+        <span class="lane-value"><strong id="audioValue">Normal</strong><small>klasifikasi</small></span>
+      </div>
+      <canvas id="audioCanvas" class="lane-canvas"></canvas>
+    </article>
+
+  </section>
+
+  <!-- ===== LOG ===== -->
+  <section class="log-section">
+    <div class="log-head">
+      <h2>Riwayat Deteksi</h2>
+      <button class="btn-secondary" id="exportBtn">Unduh CSV</button>
+    </div>
+
+    <div class="table-wrap">
+      <table id="logTable">
+        <thead>
+          <tr>
+            <th>Waktu</th>
+            <th>Klasifikasi</th>
+            <th>HR (bpm)</th>
+            <th>SpO&sub2; (%)</th>
+          </tr>
+        </thead>
+        <tbody id="logBody">
+          <!-- diisi via JS -->
+        </tbody>
+      </table>
+      <p class="empty-state" id="emptyState">Belum ada kejadian tercatat. Tekan tombol simulasi di atas untuk mencoba.</p>
+    </div>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <p>Ini simulasi demo untuk keperluan portofolio &amp; prototipe GEMASTIK &mdash; bukan alat diagnosis medis sungguhan. Data dibangkitkan secara acak di browser, tidak berasal dari sensor nyata.</p>
+</footer>
+
+<script src="script.js"></script>
+</body>
+</html>
