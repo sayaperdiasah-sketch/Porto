@@ -1,0 +1,283 @@
+/* =========================================================
+   STATE
+========================================================= */
+const state = {
+  hr: 78,
+  spo2: 98,
+  status: 'NORMAL', // NORMAL | CRACKLE | WHEEZE | CRACKLE+WHEEZE
+  episodeActive: false,
+  episodeTicksLeft: 0,
+  phaseHR: 0,
+  phaseSpO2: 0,
+  phaseAudio: 0,
+  log: []
+};
+
+const LANE_LENGTH = 220; // jumlah sampel yang ditampilkan per grafik
+const buffers = {
+  hr: new Array(LANE_LENGTH).fill(0),
+  spo2: new Array(LANE_LENGTH).fill(0),
+  audio: new Array(LANE_LENGTH).fill(0)
+};
+
+/* =========================================================
+   DOM REFS
+========================================================= */
+const hrCanvas = document.getElementById('hrCanvas');
+const spo2Canvas = document.getElementById('spo2Canvas');
+const audioCanvas = document.getElementById('audioCanvas');
+
+const hrValueEl = document.getElementById('hrValue');
+const spo2ValueEl = document.getElementById('spo2Value');
+const audioValueEl = document.getElementById('audioValue');
+
+const statusText = document.getElementById('statusText');
+const statusBanner = document.getElementById('statusBanner');
+const triggerBtn = document.getElementById('triggerBtn');
+
+const logBody = document.getElementById('logBody');
+const emptyState = document.getElementById('emptyState');
+const exportBtn = document.getElementById('exportBtn');
+
+const battLevelEl = document.getElementById('battLevel');
+
+/* =========================================================
+   HELPERS
+========================================================= */
+function clamp(v, min, max){ return Math.max(min, Math.min(max, v)); }
+
+function randomWalk(value, step, min, max){
+  return clamp(value + (Math.random() - 0.5) * step, min, max);
+}
+
+function fitCanvas(canvas){
+  const ratio = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * ratio;
+  canvas.height = rect.height * ratio;
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  return { ctx, w: rect.width, h: rect.height };
+}
+
+/* =========================================================
+   WAVEFORM SHAPES
+========================================================= */
+// Bentuk pulsa jantung (PPG-like): puncak tajam + notch dikrotik kecil
+function pulseShape(phase){
+  const t = ((phase / (2 * Math.PI)) % 1 + 1) % 1;
+  const main = Math.exp(-Math.pow((t - 0.12) * 9, 2)) * 1.0;
+  const notch = Math.exp(-Math.pow((t - 0.35) * 14, 2)) * 0.28;
+  return main + notch;
+}
+
+// Bentuk pletismograf SpO2: lebih halus, sedikit tertinggal dari HR
+function spo2Shape(phase){
+  const t = ((phase / (2 * Math.PI)) % 1 + 1) % 1;
+  return Math.exp(-Math.pow((t - 0.2) * 6, 2));
+}
+
+// Amplop napas + noise; berubah bentuk saat status abnormal
+function audioShape(phase, status){
+  const t = ((phase / (2 * Math.PI)) % 1 + 1) % 1;
+  const breath = Math.sin(t * Math.PI); // amplop napas halus, satu siklus naik-turun
+
+  let noise = (Math.random() - 0.5) * 0.06; // noise dasar halus
+
+  if (status === 'WHEEZE' || status === 'CRACKLE+WHEEZE') {
+    // wheeze: osilasi frekuensi tinggi bertumpuk di amplop napas
+    noise += Math.sin(phase * 18) * 0.22;
+  }
+  if (status === 'CRACKLE' || status === 'CRACKLE+WHEEZE') {
+    // crackle: letupan pendek acak
+    if (Math.random() < 0.06) noise += (Math.random() - 0.5) * 0.9;
+  }
+
+  return breath * 0.6 + noise;
+}
+
+/* =========================================================
+   DRAW
+========================================================= */
+function drawLane(canvas, buffer, color){
+  const { ctx, w, h } = fitCanvas(canvas);
+  ctx.clearRect(0, 0, w, h);
+
+  // grid halus
+  ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+  ctx.lineWidth = 1;
+  for (let gx = 0; gx < w; gx += 28) {
+    ctx.beginPath();
+    ctx.moveTo(gx, 0);
+    ctx.lineTo(gx, h);
+    ctx.stroke();
+  }
+
+  const midY = h / 2;
+  const amp = h * 0.4;
+  const step = w / (buffer.length - 1);
+
+  ctx.beginPath();
+  buffer.forEach((v, i) => {
+    const x = i * step;
+    const y = midY - v * amp;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.8;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 6;
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+}
+
+/* =========================================================
+   STATUS / BANNER
+========================================================= */
+function applyStatus(status){
+  state.status = status;
+  const isAlert = status !== 'NORMAL';
+
+  statusText.textContent = status;
+  statusText.classList.toggle('alert', isAlert);
+  statusBanner.classList.toggle('is-alert', isAlert);
+  audioValueEl.textContent =
+    status === 'NORMAL' ? 'Normal' :
+    status === 'CRACKLE' ? 'Crackle' :
+    status === 'WHEEZE' ? 'Wheeze' : 'Crackle+Wheeze';
+}
+
+function addLogEntry(status, hr, spo2){
+  const time = new Date().toLocaleTimeString('id-ID', { hour12: false });
+  state.log.unshift({ time, status, hr: Math.round(hr), spo2: Math.round(spo2) });
+  state.log = state.log.slice(0, 50);
+  renderLog();
+}
+
+function renderLog(){
+  if (state.log.length === 0) {
+    emptyState.style.display = 'block';
+    logBody.innerHTML = '';
+    return;
+  }
+  emptyState.style.display = 'none';
+  logBody.innerHTML = state.log.map(entry => `
+    <tr>
+      <td>${entry.time}</td>
+      <td>${entry.status}</td>
+      <td>${entry.hr}</td>
+      <td>${entry.spo2}</td>
+    </tr>
+  `).join('');
+}
+
+/* =========================================================
+   EPISODE TRIGGER
+========================================================= */
+triggerBtn.addEventListener('click', () => {
+  if (state.episodeActive) return;
+
+  const options = ['CRACKLE', 'WHEEZE', 'CRACKLE+WHEEZE'];
+  const chosen = options[Math.floor(Math.random() * options.length)];
+
+  state.episodeActive = true;
+  state.episodeTicksLeft = 200; // durasi episode (~8 detik pada interval 40ms)
+  applyStatus(chosen);
+  triggerBtn.disabled = true;
+  triggerBtn.textContent = 'Episode sedang berlangsung…';
+
+  addLogEntry(chosen, state.hr, state.spo2);
+});
+
+function endEpisodeIfDone(){
+  if (!state.episodeActive) return;
+  state.episodeTicksLeft -= 1;
+  if (state.episodeTicksLeft <= 0) {
+    state.episodeActive = false;
+    applyStatus('NORMAL');
+    addLogEntry('NORMAL (pulih)', state.hr, state.spo2);
+    triggerBtn.disabled = false;
+    triggerBtn.textContent = 'Simulasikan episode wheezing';
+  }
+}
+
+/* =========================================================
+   CSV EXPORT
+========================================================= */
+exportBtn.addEventListener('click', () => {
+  if (state.log.length === 0) return;
+
+  const header = 'Waktu,Klasifikasi,HR (bpm),SpO2 (%)\n';
+  const rows = state.log
+    .slice()
+    .reverse()
+    .map(e => `${e.time},${e.status},${e.hr},${e.spo2}`)
+    .join('\n');
+
+  const blob = new Blob([header + rows], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `riwayat-deteksi-${Date.now()}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+});
+
+/* =========================================================
+   MAIN LOOP
+========================================================= */
+function tick(){
+  // update nilai fisiologis
+  if (state.episodeActive) {
+    state.hr = randomWalk(state.hr, 3, 88, 118);
+    state.spo2 = randomWalk(state.spo2, 1.2, 89, 95);
+  } else {
+    state.hr = randomWalk(state.hr, 1.5, 62, 92);
+    state.spo2 = randomWalk(state.spo2, 0.4, 95, 99);
+  }
+
+  // fase gelombang (kecepatan mengikuti HR)
+  state.phaseHR += (state.hr / 60) * (2 * Math.PI) * 0.04;
+  state.phaseSpO2 += (state.hr / 60) * (2 * Math.PI) * 0.04;
+  state.phaseAudio += 0.05;
+
+  buffers.hr.push(pulseShape(state.phaseHR));
+  buffers.hr.shift();
+
+  buffers.spo2.push(spo2Shape(state.phaseSpO2) * (state.spo2 / 100));
+  buffers.spo2.shift();
+
+  buffers.audio.push(audioShape(state.phaseAudio, state.status));
+  buffers.audio.shift();
+
+  hrValueEl.textContent = Math.round(state.hr);
+  spo2ValueEl.textContent = Math.round(state.spo2);
+
+  drawLane(hrCanvas, buffers.hr, getComputedStyle(document.documentElement).getPropertyValue('--hr-color'));
+  drawLane(spo2Canvas, buffers.spo2, getComputedStyle(document.documentElement).getPropertyValue('--spo2-color'));
+  drawLane(audioCanvas, buffers.audio, getComputedStyle(document.documentElement).getPropertyValue('--audio-color'));
+
+  endEpisodeIfDone();
+}
+
+setInterval(tick, 40);
+
+// baterai turun perlahan agar terasa hidup, tanpa pernah habis di sesi demo
+let battery = 92;
+setInterval(() => {
+  battery = clamp(battery - 0.1, 55, 100);
+  battLevelEl.textContent = `${Math.round(battery)}%`;
+}, 4000);
+
+// gambar ulang saat ukuran layar berubah
+window.addEventListener('resize', () => {
+  drawLane(hrCanvas, buffers.hr, getComputedStyle(document.documentElement).getPropertyValue('--hr-color'));
+  drawLane(spo2Canvas, buffers.spo2, getComputedStyle(document.documentElement).getPropertyValue('--spo2-color'));
+  drawLane(audioCanvas, buffers.audio, getComputedStyle(document.documentElement).getPropertyValue('--audio-color'));
+});
+
+renderLog();
